@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>WOW64CPU.DLL : Binary Translator for AMD64 Windows</title>
+<title>WOW64CPU.DLL : The Binary Translator for AMD64 Windows</title>
 <style>
     :root {
         --page-bg: #FFFFFF;
@@ -263,11 +263,12 @@
         <button class="navlink" data-target="panel-getbopcode">BTCpuGetBopCode</button>
         <button class="navlink" data-target="panel-simulate">BTCpuSimulate</button>
         <button class="navlink" data-target="panel-turbothunk">BTCpuTurboThunkControl</button>
-        <button class="navlink stub" data-target="panel-processinit">BTCpuProcessInit <em>(stub)</em></button>
+        <button class="navlink" data-target="panel-processinit">BTCpuProcessInit</button>
         <button class="navlink stub" data-target="panel-resetconsistent">BTCpuResetToConsistentState <em>(stub)</em></button>
         <button class="navlink stub" data-target="panel-isfeature">BTCpuIsProcessorFeaturePresent <em>(n/a)</em></button>
 
         <div class="subhead">Internal&nbsp;machinery</div>
+        <button class="navlink" data-target="panel-threadinit">BTCpuThreadInit <em>(undocumented export)</em></button>
         <button class="navlink" data-target="panel-runsimulated">RunSimulatedCode</button>
         <button class="navlink" data-target="panel-turbodispatch">TurboDispatchJumpAddress*</button>
 
@@ -339,11 +340,11 @@
                 <tr><th>ordinal / name</th><th>kind</th><th>documented below</th></tr>
                 <tr><td class="reg">BTCpuGetBopCode</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuGetContext</td><td>function</td><td>yes</td></tr>
-                <tr><td class="reg">BTCpuProcessInit</td><td>function</td><td>stub</td></tr>
+                <tr><td class="reg">BTCpuProcessInit</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuResetToConsistentState</td><td>function</td><td>stub</td></tr>
                 <tr><td class="reg">BTCpuSetContext</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuSimulate</td><td>function</td><td>yes</td></tr>
-                <tr><td class="reg">BTCpuThreadInit</td><td>function</td><td>not yet examined</td></tr>
+                <tr><td class="reg">BTCpuThreadInit</td><td>function <span style="color:#888;">(not in original export list; found adjacent, also documented)</span></td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuTurboThunkControl</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">TurboDispatchJumpAddressStart</td><td>data</td><td>yes</td></tr>
                 <tr><td class="reg">TurboDispatchJumpAddressEnd</td><td>data</td><td>yes</td></tr>
@@ -585,13 +586,37 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
 
         <!-- ================= stubs ================= -->
         <section id="panel-processinit" class="panel">
-            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuProcessInit <span style="font-weight:normal;color:#999;">— not yet documented</span></h2>
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuProcessInit</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">called once per process</span></div>
+
             <p>
-            Called once, very early, from <code>Wow64LdrpInitialize</code>, before
-            <code>BTCpuSimulate</code>'s first call. Known from public discussion to be where
-            <code>CpupSystemCallFast</code> is decided (see <code>BTCpuGetBopCode</code>), but
-            the function itself has not yet been traced for this page.
+            Called once, very early in process startup, from <code>Wow64LdrpInitialize</code>,
+            before <code>BTCpuSimulate</code>'s first call. This is where the module's two
+            process-lifetime globals are decided: <code>CpupSystemCallFast</code>, read later by
+            <code>BTCpuGetBopCode</code>, and <code>CpupCpuAreaEnabledFeatures</code>, read later
+            by <code>RunSimulatedCode</code> and by <code>BTCpuThreadInit</code>.
             </p>
+
+            <pre class="proto"><span class="kw">NTSTATUS</span> <span class="type">BTCpuProcessInit</span>(<span class="kw">VOID</span>);  <span class="comment">// no arguments consumed</span></pre>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>Resolves a count from a TEB field (offset <code>0x180C</code>); a negative value triggers an extra indirection through another TEB-adjacent field (offset <code>0x18</code>) before continuing — consistent with resolving an entry in some dynamically-sized, possibly activation-context-related table. The exact structure being walked here is not fully pinned down.</li>
+                <li>Sets a flag bit on whatever that resolves to, then checks <code>SharedUserData+0x308</code> (a <code>KUSER_SHARED_DATA</code> field) against <code>1</code>. If it matches, the fast-syscall setup below is skipped entirely and the function proceeds straight to the CPU-area-features step.</li>
+                <li>Otherwise, queries <code>NtQueryInformationProcess</code> (current process, information class <code>0x2C</code>, i.e. <code>ProcessMitigationPolicy</code>) for the dynamic-code mitigation policy. Failure, or a policy value indicating dynamic code is prohibited, skips the fast-syscall setup and leaves <code>CpupSystemCallFast</code> at its default (off).</li>
+                <li>If dynamic code is permitted: calls <code>NtProtectVirtualMemory</code> on the page containing <code>KiFastSystemCall</code>. On success, sets <code>CpupSystemCallFast = 1</code> — this is the flag <code>BTCpuGetBopCode</code> reads on every subsequent syscall dispatch.</li>
+                <li>Unconditionally, regardless of which branch was taken above: calls <code>RtlWow64GetCpuAreaEnabledFeatures</code> and stores the result in <code>CpupCpuAreaEnabledFeatures</code> — the same global <code>RunSimulatedCode</code> checks before deciding whether an XSTATE restore is required, and which gates all of <code>BTCpuThreadInit</code>'s work.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">confirms the publicly known description</div>
+                Prior public discussion of WOW64CPU describes <code>CpupSystemCallFast</code>
+                as being set when the process isn't under the dynamic-code-prohibition
+                mitigation and a protection change on <code>KiFastSystemCall</code> succeeds.
+                Direct tracing confirms this and adds the second half of the picture: the same
+                function is also where the CPU-area feature mask that governs XSTATE handling
+                throughout the rest of the module gets its one-time value.
+            </div>
         </section>
 
         <section id="panel-resetconsistent" class="panel">
@@ -612,6 +637,37 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
         </section>
 
         <!-- ================= internal machinery ================= -->
+        <section id="panel-threadinit" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuThreadInit <span style="font-weight:normal;color:#999;">(undocumented export)</span></h2>
+            <div class="badge-row"><span class="badge">exported, not in the commonly-quoted list</span><span class="badge">called once per thread</span></div>
+
+            <p>
+            Not among the export names usually quoted for WOW64CPU.DLL, but present in this
+            build and clearly load-bearing — it precomputes a pointer that
+            <code>RunSimulatedCode</code> depends on. Called once per thread, presumably from
+            the WOW64 thread-attach path mirroring <code>BTCpuProcessInit</code>'s process-attach
+            timing.
+            </p>
+
+            <pre class="proto"><span class="kw">NTSTATUS</span> <span class="type">BTCpuThreadInit</span>(<span class="kw">VOID</span>);  <span class="comment">// no arguments consumed</span></pre>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>If <code>CpupCpuAreaEnabledFeatures</code> (set once, process-wide, in <code>BTCpuProcessInit</code>) is zero, the function does nothing further and returns success immediately — everything below only runs when extended CPU-area features are actually enabled for this process.</li>
+                <li>Otherwise, calls <code>RtlWow64GetCurrentCpuArea</code> for the current thread, fast-failing via <code>int 29h</code> on a negative status.</li>
+                <li>Computes a pointer from the returned CPU area: a fixed offset (<code>0xCC</code>) plus a variable field read from that same area (offset <code>0x2DC</code>), and stores the result into the TEB at offset <code>0x14D8</code>.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">why this matters for RunSimulatedCode</div>
+                That same TEB slot, <code>[gs:0x1488]</code>-relative offset <code>0x14D8</code>,
+                is exactly what <code>RunSimulatedCode</code> reads before deciding whether to
+                call <code>RtlXRestore</code> on the way into 32-bit mode. <code>BTCpuThreadInit</code>'s
+                entire purpose is computing that pointer once, at thread creation, rather than
+                re-deriving it on every mode switch.
+            </div>
+        </section>
+
         <section id="panel-runsimulated" class="panel">
             <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>RunSimulatedCode <span style="font-weight:normal;color:#999;">(internal)</span></h2>
             <div class="badge-row"><span class="badge">not exported</span><span class="badge">the actual mode switch</span></div>
@@ -685,7 +741,8 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
 
         <footer class="pagefoot">
             <div>WOW64CPU.DLL is not documented by Microsoft. This page describes observed behaviour only and is not derived from, and does not reproduce, any Microsoft source or internal documentation.</div>
-            <div class="revhist">rev. 1 — initial publication: BTCpuGetContext, BTCpuSetContext, BTCpuGetBopCode, BTCpuSimulate, BTCpuTurboThunkControl, RunSimulatedCode, TurboDispatchJumpAddress*</div>
+            <div class="revhist">rev. 1 — initial publication: BTCpuGetContext, BTCpuSetContext, BTCpuGetBopCode, BTCpuSimulate, BTCpuTurboThunkControl, RunSimulatedCode, TurboDispatchJumpAddress*
+rev. 2 — added BTCpuProcessInit, BTCpuThreadInit (undocumented export, not in the commonly-quoted list)</div>
         </footer>
     </main>
 </div>
