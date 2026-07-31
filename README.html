@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WOW64CPU.DLL : Binary Translator for AMD64 Windows</title>
+<style>
+    :root {
+        --page-bg: #FFFFFF;
+        --text: #000000;
+        --link: #0000CC;
+        --link-visited: #551A8B;
+        --rule: #000000;
+        --code-bg: #F0F0F0;
+        --table-border: #808080;
+        --nav-bg: #F5F5F0;
+        --note-bg: #FFFFEE;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        background: var(--page-bg);
+        color: var(--text);
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 16px;
+        line-height: 1.5;
+    }
+
+    a { color: var(--link); }
+    a:visited { color: var(--link-visited); }
+
+    .layout {
+        display: flex;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    /* ---- Sidebar navigation ---- */
+    nav.toc {
+        width: 230px;
+        flex-shrink: 0;
+        padding: 24px 16px 24px 24px;
+        border-right: 2px solid var(--rule);
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+        height: 100vh;
+        overflow-y: auto;
+        font-family: "Courier New", monospace;
+        font-size: 13px;
+    }
+
+    nav.toc h2 {
+        font-family: Georgia, serif;
+        font-size: 15px;
+        font-weight: bold;
+        letter-spacing: 0.02em;
+        margin: 0 0 4px 0;
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: 4px;
+    }
+
+    nav.toc .subhead {
+        font-weight: bold;
+        margin: 16px 0 4px 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #444;
+    }
+
+    nav.toc button.navlink {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: none;
+        padding: 3px 6px;
+        margin: 1px 0;
+        font-family: "Courier New", monospace;
+        font-size: 13px;
+        color: var(--link);
+        cursor: pointer;
+        border-radius: 2px;
+    }
+    nav.toc button.navlink:hover { background: #E4E4DC; text-decoration: underline; }
+    nav.toc button.navlink.active { background: #000000; color: #FFFFFF; }
+    nav.toc button.navlink.stub { color: #888; font-style: italic; }
+
+    /* ---- Main content ---- */
+    main {
+        flex: 1;
+        min-width: 0;
+        padding: 28px 40px 80px 40px;
+    }
+
+    .masthead {
+        border-bottom: 3px double var(--rule);
+        padding-bottom: 10px;
+        margin-bottom: 4px;
+    }
+    .masthead h1 {
+        font-size: 26px;
+        margin: 0 0 2px 0;
+        letter-spacing: 0.01em;
+    }
+    .masthead .subtitle {
+        font-size: 14px;
+        font-style: italic;
+        color: #333;
+    }
+    .masthead .meta {
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        color: #555;
+        margin-top: 8px;
+    }
+
+    section.panel { display: none; }
+    section.panel.active { display: block; }
+
+    h2.fn-title {
+        font-size: 20px;
+        margin: 28px 0 2px 0;
+        font-family: "Courier New", monospace;
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: 4px;
+    }
+    h2.fn-title .module-prefix { color: #777; font-weight: normal; }
+
+    .badge-row {
+        margin: 6px 0 18px 0;
+        font-size: 12px;
+        font-family: "Courier New", monospace;
+        color: #444;
+    }
+    .badge {
+        display: inline-block;
+        border: 1px solid var(--table-border);
+        padding: 1px 6px;
+        margin-right: 6px;
+        background: var(--code-bg);
+    }
+
+    h3 {
+        font-size: 15px;
+        margin: 22px 0 6px 0;
+        border-bottom: 1px solid #CCC;
+        padding-bottom: 2px;
+    }
+
+    p { margin: 8px 0; }
+
+    code, .mono {
+        font-family: "Courier New", monospace;
+        font-size: 14px;
+    }
+
+    pre.proto {
+        background: var(--code-bg);
+        border: 1px solid var(--table-border);
+        padding: 12px 14px;
+        overflow-x: auto;
+        font-family: "Courier New", monospace;
+        font-size: 13.5px;
+        line-height: 1.45;
+    }
+    pre.proto .kw { color: #00008B; }
+    pre.proto .type { color: #006400; }
+    pre.proto .comment { color: #777; font-style: italic; }
+
+    table.args {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 8px 0 18px 0;
+        font-size: 14px;
+    }
+    table.args th, table.args td {
+        border: 1px solid var(--table-border);
+        padding: 6px 10px;
+        text-align: left;
+        vertical-align: top;
+    }
+    table.args th {
+        background: var(--code-bg);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    table.args td.reg { font-family: "Courier New", monospace; white-space: nowrap; }
+
+    .note {
+        background: var(--note-bg);
+        border: 1px solid #D8D080;
+        border-left: 4px solid #B8A800;
+        padding: 10px 14px;
+        margin: 14px 0;
+        font-size: 14px;
+    }
+    .note .label {
+        font-weight: bold;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #665500;
+        margin-bottom: 3px;
+    }
+
+    .callchain {
+        font-family: "Courier New", monospace;
+        font-size: 12.5px;
+        background: #FAFAF7;
+        border: 1px dashed #999;
+        padding: 10px 14px;
+        margin: 10px 0 18px 0;
+        white-space: pre;
+        overflow-x: auto;
+    }
+
+    ol.steps, ul.plain {
+        margin: 8px 0;
+        padding-left: 26px;
+    }
+    ol.steps li, ul.plain li { margin-bottom: 6px; }
+
+    hr.sep { border: none; border-top: 1px solid #CCC; margin: 26px 0; }
+
+    footer.pagefoot {
+        margin-top: 50px;
+        padding-top: 14px;
+        border-top: 2px solid var(--rule);
+        font-size: 12px;
+        color: #555;
+    }
+
+    .revhist {
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        margin-top: 8px;
+    }
+
+    @media (max-width: 860px) {
+        .layout { flex-direction: column; }
+        nav.toc { width: auto; height: auto; position: static; border-right: none; border-bottom: 2px solid var(--rule); }
+        main { padding: 20px; }
+    }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+    <nav class="toc">
+        <h2>WOW64CPU.DLL</h2>
+
+        <div class="subhead">Overview</div>
+        <button class="navlink" data-target="panel-overview">the module</button>
+
+        <div class="subhead">Public&nbsp;interface</div>
+        <button class="navlink" data-target="panel-getcontext">BTCpuGetContext</button>
+        <button class="navlink" data-target="panel-setcontext">BTCpuSetContext</button>
+        <button class="navlink" data-target="panel-getbopcode">BTCpuGetBopCode</button>
+        <button class="navlink" data-target="panel-simulate">BTCpuSimulate</button>
+        <button class="navlink" data-target="panel-turbothunk">BTCpuTurboThunkControl</button>
+        <button class="navlink stub" data-target="panel-processinit">BTCpuProcessInit <em>(stub)</em></button>
+        <button class="navlink stub" data-target="panel-resetconsistent">BTCpuResetToConsistentState <em>(stub)</em></button>
+        <button class="navlink stub" data-target="panel-isfeature">BTCpuIsProcessorFeaturePresent <em>(n/a)</em></button>
+
+        <div class="subhead">Internal&nbsp;machinery</div>
+        <button class="navlink" data-target="panel-runsimulated">RunSimulatedCode</button>
+        <button class="navlink" data-target="panel-turbodispatch">TurboDispatchJumpAddress*</button>
+
+        <div class="subhead">About this page</div>
+        <button class="navlink" data-target="panel-methodology">methodology</button>
+    </nav>
+
+    <main>
+        <div class="masthead">
+            <h1>WOW64CPU.DLL</h1>
+            <div class="subtitle">the binary translator DLL for running x86 programs under WOW64 on AMD64 Windows</div>
+            <div class="meta">last revised for this build · undocumented by Microsoft · derived from live observation, not from any Microsoft source</div>
+        </div>
+
+        <!-- ================= OVERVIEW ================= -->
+        <section id="panel-overview" class="panel active">
+            <h2 class="fn-title">the module</h2>
+            <div class="badge-row">
+                <span class="badge">x64</span>
+                <span class="badge">%SystemRoot%\System32\wow64cpu.dll</span>
+                <span class="badge">~40 KB image</span>
+            </div>
+
+            <p>
+            WOW64CPU.DLL is one of the small set of 64-bit binaries that Windows allows to be
+            mapped into an otherwise 32-bit process. Together with WOW64.DLL and WOW64WIN.DLL
+            it forms the WOW64 subsystem on x86-on-AMD64 Windows: WOW64.DLL drives process and
+            thread setup, WOW64WIN.DLL thunks the Win32 USER/GDI system calls, and WOW64CPU.DLL
+            supplies the actual mode switch — flipping the processor between 32-bit compatibility
+            mode and 64-bit long mode around every system call the 32-bit program makes.
+            </p>
+
+            <p>
+            It is not loaded through an ordinary <code>LoadLibrary</code> call. It is mapped by
+            NTDLL's own WOW64 initialisation code, inside <code>Wow64LdrpInitialize</code>, before
+            any user-mode code in the new process has had a chance to run. A 32-bit process trying
+            to <code>LoadLibraryW(L"wow64cpu.dll")</code> for itself gets <code>ERROR_BAD_EXE_FORMAT</code>
+            — the ordinary loader path correctly refuses to map a 64-bit image into a 32-bit
+            address space. The module is only reachable, as far as anyone outside Microsoft can
+            tell, by attaching a debugger to a process that already has it loaded and switching
+            the debugger's effective machine to <code>amd64</code>.
+            </p>
+
+            <p>
+            The role WOW64CPU.DLL plays is defined entirely by its caller. Two mechanisms exist
+            for pointing a WOW64 process at a binary translator DLL other than the built-in one:
+            a per-image registry override under
+            <code>HKLM\SOFTWARE\Microsoft\Wow64\x86\&lt;image name&gt;</code>, used by the ARM64
+            builds to substitute XTAJIT.DLL or WOWARMHW.DLL, and it is this substitutability that
+            defines the exported contract documented below — every export here exists because
+            WOW64.DLL's loader, <code>CpuLoadBinaryTranslator</code>, resolves it by name and
+            expects it to behave identically regardless of which translator supplies it.
+            </p>
+
+            <div class="note">
+                <div class="label">why so little of this is documented anywhere</div>
+                A binary translator DLL is an internal implementation detail of the loader, not
+                a public Win32 surface — nothing in the Windows SDK ever calls these functions
+                directly, so there was never a reason for Microsoft to write a page about them.
+                The only pre-existing public information is the bare list of resolved export
+                names, visible on the Wine reimplementation's own (also largely undocumented)
+                WOW64CPU.DLL, and scattered call-stack fragments in unrelated crash reports and
+                security write-ups. Nothing describing calling convention, argument meaning, or
+                behaviour appears to exist in public form prior to this page.
+            </div>
+
+            <h3>exports actually present on this build</h3>
+            <table class="args">
+                <tr><th>ordinal / name</th><th>kind</th><th>documented below</th></tr>
+                <tr><td class="reg">BTCpuGetBopCode</td><td>function</td><td>yes</td></tr>
+                <tr><td class="reg">BTCpuGetContext</td><td>function</td><td>yes</td></tr>
+                <tr><td class="reg">BTCpuProcessInit</td><td>function</td><td>stub</td></tr>
+                <tr><td class="reg">BTCpuResetToConsistentState</td><td>function</td><td>stub</td></tr>
+                <tr><td class="reg">BTCpuSetContext</td><td>function</td><td>yes</td></tr>
+                <tr><td class="reg">BTCpuSimulate</td><td>function</td><td>yes</td></tr>
+                <tr><td class="reg">BTCpuThreadInit</td><td>function</td><td>not yet examined</td></tr>
+                <tr><td class="reg">BTCpuTurboThunkControl</td><td>function</td><td>yes</td></tr>
+                <tr><td class="reg">TurboDispatchJumpAddressStart</td><td>data</td><td>yes</td></tr>
+                <tr><td class="reg">TurboDispatchJumpAddressEnd</td><td>data</td><td>yes</td></tr>
+            </table>
+            <p style="font-size:13px;color:#555;">
+            <code>BTCpuIsProcessorFeaturePresent</code> is sometimes quoted as a WOW64CPU export
+            in secondary sources, but it is not present in this build's export table. It may be
+            specific to the ARM64 translator DLLs (XTAJIT.DLL / WOWARMHW.DLL), which is where it
+            has actually been observed. See the note on that entry in the sidebar.
+            </p>
+        </section>
+
+        <!-- ================= BTCpuGetContext ================= -->
+        <section id="panel-getcontext" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuGetContext</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">x64 fastcall</span></div>
+
+            <p>
+            Retrieves the 32-bit register context of a thread running under WOW64, into a
+            caller-supplied <code>WOW64_CONTEXT</code>-shaped buffer. It is the function
+            standing behind <code>Wow64GetThreadContext</code> and, less obviously, is also
+            invoked internally by WOW64WIN.DLL around callback dispatch, to snapshot the
+            guest register state before delivering a callback into 32-bit code.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; no header declares this</span>
+<span class="kw">NTSTATUS</span> <span class="type">BTCpuGetContext</span>(
+    <span class="kw">HANDLE</span>  ThreadHandle,
+    <span class="kw">PVOID</span>   Reserved,        <span class="comment">// unused; value discarded on entry</span>
+    <span class="kw">PVOID</span>   Reserved2,       <span class="comment">// unused by any observed call site</span>
+    <span class="kw">PWOW64_CONTEXT</span> Context  <span class="comment">// in/out — caller pre-sets ContextFlags</span>
+);</pre>
+
+            <h3>parameters</h3>
+            <table class="args">
+                <tr><th>register</th><th>role</th></tr>
+                <tr><td class="reg">rcx</td><td>Thread handle. Observed as the current-thread pseudo-handle (<code>-2</code>) in every trace taken, but the function explicitly compares against <code>-2</code> and falls back to a general path otherwise, so real thread handles are accepted.</td></tr>
+                <tr><td class="reg">rdx</td><td>Not used. Zeroed immediately on entry regardless of what the caller passes.</td></tr>
+                <tr><td class="reg">r8</td><td>Not used by the caller in any observed call; the function reserves its own local scratch for this slot.</td></tr>
+                <tr><td class="reg">r9</td><td>Output buffer. The context is written here. The caller is expected to have set the flags field (offset 0) before the call, in the usual <code>CONTEXT.ContextFlags</code> convention.</td></tr>
+            </table>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>Calls <code>RtlWow64GetCpuAreaInfo</code> for the current thread. A negative status here is treated as unrecoverable: the function fast-fails via <code>int 29h</code> rather than returning an error, meaning callers can assume this step always succeeds in a correctly functioning process.</li>
+                <li>If the target is the current thread <em>and</em> a flag returned by that call is set, a fast path is taken: the context is copied straight out of the thread's cached CPU area via <code>RtlCopyContext</code>, using the flags the caller already placed in the output buffer.</li>
+                <li>Otherwise — a different thread, or the cached-context flag not set — it falls back to <code>NtQueryInformationThread</code> with information class <code>0x1D</code> (<code>ThreadWow64Context</code>), the ordinary kernel-mediated path.</li>
+                <li>On the fast path only, if bit 30 of the returned flags is set, the function additionally ORs <code>0x88000000</code> into the output context's flags before returning — consistent with signalling that extended (XSTATE) data is present.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">observed in the wild</div>
+                Every live hit captured for this page arrived not from an application calling
+                <code>Wow64GetThreadContext</code> directly, but from
+                <code>wow64!CpuGetContext</code> → <code>Wow64KiUserCallbackDispatcher</code>,
+                triggered by a 32-bit program's <code>GetMessage</code> call. WOW64WIN uses this
+                function internally to snapshot guest state before dispatching a window-message
+                callback, not only in response to an explicit debugger-style context request.
+            </div>
+
+            <div class="callchain">wow64cpu!BTCpuGetContext
+wow64!CpuGetContext+0x54
+wow64!Wow64KiUserCallbackDispatcher+0x17b
+wow64win!whcbfnHkINLPMSG+0x2b3
+ntdll!KiUserCallbackDispatcherContinue
+wow64win!NtUserGetMessage+0x14
+wow64win!whNtUserGetMessage+0x40</span></div>
+        </section>
+
+        <!-- ================= BTCpuSetContext ================= -->
+        <section id="panel-setcontext" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuSetContext</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">x64 fastcall</span></div>
+
+            <p>
+            The write counterpart to <code>BTCpuGetContext</code>: applies a caller-supplied
+            32-bit context to a thread running under WOW64. Its structure mirrors
+            <code>BTCpuGetContext</code> closely, with one deliberate asymmetry around segment
+            selectors.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; no header declares this</span>
+<span class="kw">NTSTATUS</span> <span class="type">BTCpuSetContext</span>(
+    <span class="kw">HANDLE</span>  ThreadHandle,
+    <span class="kw">PVOID</span>   Reserved,
+    <span class="kw">PVOID</span>   Reserved2,
+    <span class="kw">PWOW64_CONTEXT</span> Context   <span class="comment">// in — context to apply</span>
+);</pre>
+
+            <h3>parameters</h3>
+            <table class="args">
+                <tr><th>register</th><th>role</th></tr>
+                <tr><td class="reg">rcx</td><td>Thread handle, same convention as <code>BTCpuGetContext</code> (<code>-2</code> = current thread).</td></tr>
+                <tr><td class="reg">rdx</td><td>Not used; zeroed on entry.</td></tr>
+                <tr><td class="reg">r8</td><td>Not used by the caller; local scratch.</td></tr>
+                <tr><td class="reg">r9</td><td>Input buffer — the context to apply.</td></tr>
+            </table>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>Same opening as <code>BTCpuGetContext</code>: <code>RtlWow64GetCpuAreaInfo</code>, same <code>int 29h</code> fast-fail on failure.</li>
+                <li>Same current-thread-and-cache-valid check to choose between the fast and slow path.</li>
+                <li><strong>Slow path</strong>: <code>NtSetInformationThread</code>, information class <code>0x1D</code> — the direct mirror of the get-context slow path.</li>
+                <li><strong>Fast path</strong> is not a plain mirror of get. The incoming context's flags are masked against <code>0x10010</code> and compared for an exact match; if that fails, the function additionally compares three specific fields of the incoming context against the cached CPU area at the same offsets. Those offsets correspond to the segment-selector fields of a 32-bit <code>CONTEXT</code> structure. If any of the three differ, the function falls all the way back to the slow, kernel-mediated path instead of writing in place — segment selector changes are not considered safe to apply without going through the kernel. If the selectors are unchanged, the fast path proceeds via <code>RtlCopyContext</code>, with the flags masked by <code>0x37FFFFFF</code> first.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">why the asymmetry</div>
+                Reading stale segment-selector state back to the caller is harmless, so
+                <code>BTCpuGetContext</code>'s fast path has no equivalent check. Writing
+                selectors is a different matter — loading a segment register is a privileged,
+                validated operation, so <code>BTCpuSetContext</code> only takes the fast,
+                in-memory path when the selectors aren't actually changing; any real change is
+                routed through <code>NtSetInformationThread</code> instead.
+            </div>
+        </section>
+
+        <!-- ================= BTCpuGetBopCode ================= -->
+        <section id="panel-getbopcode" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuGetBopCode</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">5 instructions</span></div>
+
+            <p>
+            The smallest export in the module — a two-way selector, not really a "get" in the
+            sense of reading external state. It hands back the address of whichever syscall
+            entry trampoline the process has been configured to use.
+            </p>
+
+            <pre class="proto"><span class="kw">PVOID</span> <span class="type">BTCpuGetBopCode</span>(<span class="kw">VOID</span>);</pre>
+
+            <h3>behaviour</h3>
+            <p>
+            Reads the module-global byte <code>CpupSystemCallFast</code>. If it is non-zero, the
+            function returns the address of <code>KiFastSystemCall</code>; otherwise it returns
+            <code>KiFastSystemCall2</code>. No arguments are consulted.
+            </p>
+
+            <div class="note">
+                <div class="label">where the flag comes from</div>
+                <code>CpupSystemCallFast</code> is a one-time decision made during process
+                initialisation: WOW64CPU sets it when the process is not running under the
+                <code>ProcessDynamicCodePolicy</code> mitigation and a call to
+                <code>NtProtectVirtualMemory</code> against <code>KiFastSystemCall</code>
+                succeeds. <code>BTCpuGetBopCode</code> is simply the runtime read side of that
+                earlier decision — every syscall thunk asks this function which entry point to
+                jump to, rather than re-deriving the answer itself.
+            </div>
+        </section>
+
+        <!-- ================= BTCpuSimulate ================= -->
+        <section id="panel-simulate" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuSimulate</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">does not return</span></div>
+
+            <p>
+            The function that actually runs the 32-bit program. Despite the name suggesting an
+            emulation loop of its own, WOW64CPU's implementation of <code>BTCpuSimulate</code> is
+            a two-instruction trampoline: it calls <code>RunSimulatedCode</code> in a loop that
+            never exits under normal operation. All of the real work — the actual mode switch —
+            lives in <code>RunSimulatedCode</code>, documented separately.
+            </p>
+
+            <pre class="proto"><span class="kw">VOID</span> <span class="type">BTCpuSimulate</span>(<span class="kw">VOID</span>);  <span class="comment">// noreturn in practice</span>
+
+<span class="comment">// the entire body, in full:</span>
+BTCpuSimulate:
+    sub  rsp, 38h
+loop:
+    call RunSimulatedCode
+    jmp  loop
+    <span class="comment">; add rsp,38h / ret below are unreachable in normal operation</span></pre>
+
+            <h3>observed call sites</h3>
+            <p>Two distinct callers were observed, corresponding to two different purposes:</p>
+
+            <div class="callchain">(1) once, at process start —
+wow64cpu!BTCpuSimulate
+wow64!RunCpuSimulation+0xd
+wow64!Wow64LdrpInitialize+0x122
+ntdll!LdrpInitializeProcess
+ntdll!LdrpInitialize
+ntdll!LdrpInitializeInternal
+ntdll!LdrInitializeThunk
+
+(2) recursively, from inside the loop itself, after handling one system call —
+wow64cpu!ServiceNoTurbo+0x9
+wow64cpu!BTCpuSimulate+0x9
+wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call from wow64.dll)</span></div>
+
+            <p>
+            The second trace is a re-entry into the same call, not a second, independent call
+            from WOW64.DLL — it shows that once the 32-bit program makes a system call that
+            can't be handled by the fast "turbo" dispatch path, control comes back up through
+            <code>ServiceNoTurbo</code> and lands back inside the very loop that has been
+            running since process start, rather than <code>BTCpuSimulate</code> being invoked
+            afresh each time.
+            </p>
+        </section>
+
+        <!-- ================= BTCpuTurboThunkControl ================= -->
+        <section id="panel-turbothunk" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuTurboThunkControl</h2>
+            <div class="badge-row"><span class="badge">exported</span></div>
+
+            <p>
+            Installs, or resets, the jump table used for "turbo" system-call dispatch — the
+            fast path that lets common system calls be serviced without a full round trip
+            through <code>Wow64SystemServiceEx</code>. This is the function that populates the
+            table read by <code>TurboDispatchJumpAddressStart</code>.
+            </p>
+
+            <pre class="proto"><span class="kw">NTSTATUS</span> <span class="type">BTCpuTurboThunkControl</span>(
+    <span class="kw">ULONG</span> Operation   <span class="comment">// 0, 1, or anything else</span>
+);</pre>
+
+            <h3>parameters</h3>
+            <table class="args">
+                <tr><th>register</th><th>role</th></tr>
+                <tr><td class="reg">ecx</td><td>Operation selector. <code>0</code> installs the turbo dispatch table (the main path); <code>1</code> returns immediately with status <code>0xC000000BB</code> (<code>STATUS_NOT_SUPPORTED</code>); any other value returns <code>0xC000000D</code> (<code>STATUS_INVALID_PARAMETER</code>).</td></tr>
+            </table>
+
+            <h3>behaviour of the install path (Operation = 0)</h3>
+            <ol class="steps">
+                <li>Calls <code>NtProtectVirtualMemory</code> to make the <code>TurboThunkDispatch</code> table region writable.</li>
+                <li>Fills all 32 entries of the table with the address of a common default thunk handler.</li>
+                <li>Calls <code>NtProtectVirtualMemory</code> a second time to restore the table's original protection.</li>
+                <li>Walks the table back, verifying each of the 32 entries is either the default handler or a second recognised handler value; any entry that is neither triggers a fast-fail (<code>int 29h</code>) — a self-consistency check on the table it just wrote, not a check on caller input.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">how it's used at runtime</div>
+                <code>TurboDispatchJumpAddressStart</code> indexes directly into the table this
+                function builds, keyed by the top bits of the system call number
+                (<code>eax &gt;&gt; 0x10</code>). A system call that lands on a populated,
+                non-default entry gets serviced without ever calling
+                <code>ServiceNoTurbo</code>/<code>Wow64SystemServiceEx</code> at all.
+            </div>
+        </section>
+
+        <!-- ================= stubs ================= -->
+        <section id="panel-processinit" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuProcessInit <span style="font-weight:normal;color:#999;">— not yet documented</span></h2>
+            <p>
+            Called once, very early, from <code>Wow64LdrpInitialize</code>, before
+            <code>BTCpuSimulate</code>'s first call. Known from public discussion to be where
+            <code>CpupSystemCallFast</code> is decided (see <code>BTCpuGetBopCode</code>), but
+            the function itself has not yet been traced for this page.
+            </p>
+        </section>
+
+        <section id="panel-resetconsistent" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuResetToConsistentState <span style="font-weight:normal;color:#999;">— not yet documented</span></h2>
+            <p>Not yet traced. Likely involved in exception/unwind recovery given the name and its neighbours in the export table.</p>
+        </section>
+
+        <section id="panel-isfeature" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuIsProcessorFeaturePresent <span style="font-weight:normal;color:#999;">— not exported here</span></h2>
+            <p>
+            Not present in this build's export table (confirmed by direct symbol search, not
+            merely a failed name lookup). It appears in the export lists published for the
+            ARM64 binary translators, XTAJIT.DLL and WOWARMHW.DLL, and may be specific to that
+            architecture family rather than to WOW64CPU.DLL itself. Left here as an open
+            question rather than removed, since secondary sources do list it against WOW64CPU
+            by name.
+            </p>
+        </section>
+
+        <!-- ================= internal machinery ================= -->
+        <section id="panel-runsimulated" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>RunSimulatedCode <span style="font-weight:normal;color:#999;">(internal)</span></h2>
+            <div class="badge-row"><span class="badge">not exported</span><span class="badge">the actual mode switch</span></div>
+
+            <p>
+            Not part of the public contract — this is the function <code>BTCpuSimulate</code>
+            loops on, and it is where the processor is actually switched between 32-bit
+            compatibility mode and 64-bit long mode. Two paths through it were identified:
+            </p>
+
+            <ol class="steps">
+                <li><strong>Entry into 32-bit mode.</strong> Loads the thread's saved 32-bit register state from its CPU area, builds an IRET frame on the stack targeting the 32-bit code and stack selectors, and executes <code>iretq</code> to drop into 32-bit compatibility mode.</li>
+                <li><strong>Return from 32-bit mode</strong>, at the label <code>CpupReturnFromSimulatedCode</code>. Reached when the 32-bit code re-enters 64-bit mode — typically via the system call thunk. Swaps <code>rsp</code>/<code>r14</code>, saves the 32-bit register state back into the CPU area, and captures <code>rflags</code>.</li>
+            </ol>
+
+            <p>
+            Between those two paths sits a check of a bit in the CPU area (cleared via
+            <code>btr</code>) that decides whether an FPU/SSE state restore
+            (<code>fxrstor</code>) is needed before re-entering 32-bit mode — skipped on the
+            fast repeated-syscall path where the state is already known current, performed on
+            the slower path after other work may have touched it.
+            </p>
+        </section>
+
+        <section id="panel-turbodispatch" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>TurboDispatchJumpAddressStart / …End <span style="font-weight:normal;color:#999;">(data)</span></h2>
+            <div class="badge-row"><span class="badge">data label, not a function</span><span class="badge">32 × 8-byte entries</span></div>
+
+            <p>
+            Despite appearing in the export table alongside the <code>BTCpu*</code> functions,
+            these two symbols bound a 32-entry table of code addresses, not a callable routine
+            — <code>GetProcAddress</code> resolves them to addresses, but calling either as a
+            function is meaningless. <code>TurboDispatchJumpAddressStart</code> is in fact
+            itself the dispatch stub: it takes the top bits of the system call number and jumps
+            through the table indexed by that value. <code>...End</code> marks the table's
+            closing bound, most likely so external code — WOW64.DLL, when deciding whether a
+            given return address falls inside the turbo-dispatch region — can range-check
+            against it rather than because it is itself meant to be entered.
+            </p>
+        </section>
+
+        <!-- ================= methodology ================= -->
+        <section id="panel-methodology" class="panel">
+            <h2 class="fn-title">methodology</h2>
+            <p>
+            Everything on this page was derived from live behaviour: register state, stack
+            contents, and call stacks captured with WinDbg attached to an ordinary 32-bit
+            process (Notepad, running under SysWOW64) on a 64-bit Windows installation, cross
+            referenced against the disassembly of the functions actually reached during those
+            traces. WOW64CPU.DLL cannot be loaded directly by user code for inspection — it is
+            mapped into a process by NTDLL's own WOW64 initialisation before any of the
+            process's own code runs — so it can only be examined this way, by attaching to a
+            process that already has it resident and switching the debugger's effective machine
+            to <code>amd64</code> to see the 64-bit side of the address space.
+            </p>
+            <p>
+            No Microsoft source code, private symbol server content beyond ordinary public
+            symbols, or disassembler/decompiler output has been reproduced verbatim anywhere on
+            this page — every description here is a restatement, in the author's own words, of
+            what was observed to happen, in the same spirit as (though with nothing like the
+            thoroughness of) the reverse-engineering notes published for years at
+            <span class="mono">geoffchappell.com</span>.
+            </p>
+            <div class="note">
+                <div class="label">status</div>
+                Work in progress. <code>BTCpuProcessInit</code>, <code>BTCpuResetToConsistentState</code>,
+                and <code>BTCpuThreadInit</code> remain untraced. Corrections and additional
+                traces welcome.
+            </div>
+        </section>
+
+        <footer class="pagefoot">
+            <div>WOW64CPU.DLL is not documented by Microsoft. This page describes observed behaviour only and is not derived from, and does not reproduce, any Microsoft source or internal documentation.</div>
+            <div class="revhist">rev. 1 — initial publication: BTCpuGetContext, BTCpuSetContext, BTCpuGetBopCode, BTCpuSimulate, BTCpuTurboThunkControl, RunSimulatedCode, TurboDispatchJumpAddress*</div>
+        </footer>
+    </main>
+</div>
+
+<script>
+(function () {
+    var buttons = document.querySelectorAll('.navlink');
+    var panels = document.querySelectorAll('.panel');
+
+    function activate(id) {
+        panels.forEach(function (p) { p.classList.toggle('active', p.id === id); });
+        buttons.forEach(function (b) { b.classList.toggle('active', b.dataset.target === id); });
+        window.scrollTo(0, 0);
+    }
+
+    buttons.forEach(function (b) {
+        b.addEventListener('click', function () { activate(b.dataset.target); });
+    });
+})();
+</script>
+
+</body>
+</html>
