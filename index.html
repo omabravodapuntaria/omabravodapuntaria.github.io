@@ -272,6 +272,12 @@
         <button class="navlink" data-target="panel-runsimulated">RunSimulatedCode</button>
         <button class="navlink" data-target="panel-turbodispatch">TurboDispatchJumpAddress*</button>
 
+        <div class="subhead">NTDLL&nbsp;RTL&nbsp;support</div>
+        <button class="navlink" data-target="panel-getcpuareainfo">RtlWow64GetCpuAreaInfo</button>
+        <button class="navlink" data-target="panel-getcurrentcpuarea">RtlWow64GetCurrentCpuArea</button>
+        <button class="navlink" data-target="panel-extctxlen">RtlGetExtendedContextLength2</button>
+        <button class="navlink" data-target="panel-legacyctxlen">RtlpGetLegacyContextLength</button>
+
         <div class="subhead">About this page</div>
         <button class="navlink" data-target="panel-methodology">methodology</button>
     </nav>
@@ -709,6 +715,144 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
             </p>
         </section>
 
+        <!-- ================= NTDLL RTL support ================= -->
+        <section id="panel-getcpuareainfo" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">ntdll!</span>RtlWow64GetCpuAreaInfo</h2>
+            <div class="badge-row"><span class="badge">ntdll.dll, not wow64cpu.dll</span><span class="badge">shared across all binary translators</span></div>
+
+            <p>
+            Not specific to WOW64CPU — this lives in NTDLL and is available to any binary
+            translator DLL. Given a pointer to a CPU area, works out which architecture it
+            belongs to and how large a context buffer is needed to describe it, accounting for
+            both the fixed legacy register set and whatever extended (XSTATE) features are
+            enabled on the machine.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; parameter roles inferred from usage, not from a header</span>
+<span class="kw">NTSTATUS</span> <span class="type">RtlWow64GetCpuAreaInfo</span>(
+    <span class="kw">PVOID</span>  CpuArea,        <span class="comment">// rcx — pointer to the CPU area being queried</span>
+    <span class="kw">USHORT</span> MachineType,    <span class="comment">// rdx — 0 defers to the area's own stored tag</span>
+    <span class="kw">PVOID</span>  AreaInfo        <span class="comment">// r8  — output: sizes/offsets, caller-allocated</span>
+);</pre>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>Reads a 16-bit machine-type tag from the CPU area (offset <code>+2</code>), unless the caller supplied one directly in <code>rdx</code>.</li>
+                <li>Switches on that tag against four recognised values, each corresponding to a supported guest architecture. An unrecognised tag returns <code>STATUS_INVALID_PARAMETER</code>.</li>
+                <li>For the matched architecture, calls <code>RtlpGetLegacyContextLength</code> to get the fixed legacy-context size.</li>
+                <li>Calls <code>RtlGetExtendedContextLength2</code> to compute the additional XSTATE-extended size, gated by a feature mask read from a <code>KUSER_SHARED_DATA</code> field.</li>
+                <li>Combines both sizes with alignment rounding and writes total size, extended-region offset, and machine-type back into the caller's output structure.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">why BTCpuGetContext/SetContext need this</div>
+                Before copying a context in or out of a CPU area, the module needs to know
+                exactly how large that context is for the current architecture and feature set
+                — this function (or its <code>...CurrentCpuArea</code> sibling) is what answers
+                that question.
+            </div>
+        </section>
+
+        <section id="panel-getcurrentcpuarea" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">ntdll!</span>RtlWow64GetCurrentCpuArea</h2>
+            <div class="badge-row"><span class="badge">ntdll.dll, not wow64cpu.dll</span><span class="badge">sibling of RtlWow64GetCpuAreaInfo</span></div>
+
+            <p>
+            Functionally identical to <code>RtlWow64GetCpuAreaInfo</code>, but operates on the
+            <em>calling thread's own</em> CPU area rather than one supplied by the caller —
+            fetched directly from the TEB (<code>gs:[0x1488]</code>) at the start of the
+            function.
+            </p>
+
+            <pre class="proto"><span class="kw">NTSTATUS</span> <span class="type">RtlWow64GetCurrentCpuArea</span>(
+    <span class="kw">PUSHORT</span>  MachineType,     <span class="comment">// rcx — optional, null-checked before write</span>
+    <span class="kw">PVOID</span>    SizeInfo,        <span class="comment">// rdx — optional, null-checked before write</span>
+    <span class="kw">PVOID</span>   *CpuAreaPointer   <span class="comment">// r8  — optional, null-checked before write</span>
+);</pre>
+
+            <h3>behaviour</h3>
+            <p>
+            Same architecture-tag switch, same calls into <code>RtlpGetLegacyContextLength</code>
+            and <code>RtlGetExtendedContextLength2</code>, same size/offset computation as
+            <code>RtlWow64GetCpuAreaInfo</code>. The three output parameters are each
+            individually optional — the function checks each pointer for null before writing
+            through it, so a caller can request just the machine type, just the size info, just
+            the CPU area pointer, or any combination.
+            </p>
+
+            <div class="note">
+                <div class="label">this is the one BTCpuGetContext/SetContext actually call</div>
+                Both <code>BTCpuGetContext</code> and <code>BTCpuSetContext</code> call this
+                current-thread variant, not the general <code>...CpuAreaInfo</code> form — makes
+                sense, since both are always operating relative to the calling thread's own
+                cached state on the fast path.
+            </div>
+        </section>
+
+        <section id="panel-extctxlen" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">ntdll!</span>RtlGetExtendedContextLength2 <span style="font-weight:normal;color:#999;">(partially verified)</span></h2>
+            <div class="badge-row"><span class="badge">ntdll.dll</span><span class="badge">shared XSTATE sizing helper</span></div>
+
+            <p>
+            The function both <code>RtlWow64GetCpuAreaInfo</code> and
+            <code>RtlWow64GetCurrentCpuArea</code> call to size the XSTATE/extended-state portion
+            of a context. This is the most complex function traced for this page, and the
+            branch-level detail below should be read as a structural description, not a
+            guarantee of bit-exact correctness in every path.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; least confident signature on this page</span>
+<span class="kw">NTSTATUS</span> <span class="type">RtlGetExtendedContextLength2</span>(
+    <span class="kw">ULONG</span>    ContextFlags,   <span class="comment">// ecx</span>
+    <span class="kw">PULONG</span>   Length,         <span class="comment">// rdx — out</span>
+    <span class="kw">PULONG64</span> FeatureMask     <span class="comment">// r8  — hypothesized role</span>
+);</pre>
+
+            <h3>behaviour (structural)</h3>
+            <ol class="steps">
+                <li>Validates the requested <code>ContextFlags</code> against several bitmask patterns; combinations that don't match any recognised pattern return <code>STATUS_INVALID_PARAMETER</code> or <code>STATUS_NOT_SUPPORTED</code> depending on which check fails.</li>
+                <li>Derives a base size from a small set of fixed constants selected by which flag bits are set.</li>
+                <li>Walks a 64-bit XSTATE feature mask bit by bit (up to 64 iterations), accumulating size and alignment for each enabled feature by indexing into per-feature tables published in <code>SharedUserData</code> (offsets <code>+0x5F8</code> and <code>+0x604</code> observed) — the standard mechanism Windows uses to publish XSTATE feature geometry to user mode without a system call.</li>
+                <li>Writes the accumulated total back through <code>Length</code>.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">explicitly flagged as incomplete</div>
+                The overall shape — flag validation, then a per-feature accumulation loop driven
+                by <code>SharedUserData</code> tables — is solid. The exact meaning of every
+                individual bitmask constant compared against <code>ContextFlags</code> is not.
+                Do not treat the constants in this section as verified; confirm against live
+                Windows behaviour (varying flag combinations and comparing returned lengths)
+                before relying on them for an implementation.
+            </div>
+        </section>
+
+        <section id="panel-legacyctxlen" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">ntdll!</span>RtlpGetLegacyContextLength</h2>
+            <div class="badge-row"><span class="badge">ntdll.dll, private (note the p)</span><span class="badge">4 instructions of real logic</span></div>
+
+            <p>
+            The smallest of the RTL support functions. A straight bit-test switch returning a
+            fixed size constant for the non-extended, legacy portion of a context, per
+            architecture.
+            </p>
+
+            <pre class="proto"><span class="kw">VOID</span> <span class="type">RtlpGetLegacyContextLength</span>(
+    <span class="kw">ULONG</span>  ArchitectureFlags,  <span class="comment">// ecx</span>
+    <span class="kw">PULONG</span> Length              <span class="comment">// r8 — optional, null-checked</span>
+);</pre>
+
+            <h3>behaviour</h3>
+            <p>
+            Tests bits <code>0x10</code>, <code>0x14</code>, <code>0x15</code>, and <code>0x16</code>
+            of the input flags in sequence, returning <code>4</code>, <code>0x10</code>, or
+            <code>8</code> bytes depending on which bit is set — the size of the base
+            (non-XSTATE) register block for that architecture family. If <code>Length</code> is
+            non-null, the result is additionally written through it; the value is always also
+            returned directly in <code>eax</code>.
+            </p>
+        </section>
+
         <!-- ================= methodology ================= -->
         <section id="panel-methodology" class="panel">
             <h2 class="fn-title">methodology</h2>
@@ -742,7 +886,8 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
         <footer class="pagefoot">
             <div>WOW64CPU.DLL is not documented by Microsoft. This page describes observed behaviour only and is not derived from, and does not reproduce, any Microsoft source or internal documentation.</div>
             <div class="revhist">rev. 1 — initial publication: BTCpuGetContext, BTCpuSetContext, BTCpuGetBopCode, BTCpuSimulate, BTCpuTurboThunkControl, RunSimulatedCode, TurboDispatchJumpAddress*
-rev. 2 — added BTCpuProcessInit, BTCpuThreadInit (undocumented export, not in the commonly-quoted list)</div>
+rev. 2 — added BTCpuProcessInit, BTCpuThreadInit (undocumented export, not in the commonly-quoted list)
+rev. 3 — added NTDLL RTL support section: RtlWow64GetCpuAreaInfo, RtlWow64GetCurrentCpuArea, RtlGetExtendedContextLength2 (partially verified), RtlpGetLegacyContextLength</div>
         </footer>
     </main>
 </div>
