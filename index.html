@@ -264,7 +264,7 @@
         <button class="navlink" data-target="panel-simulate">BTCpuSimulate</button>
         <button class="navlink" data-target="panel-turbothunk">BTCpuTurboThunkControl</button>
         <button class="navlink" data-target="panel-processinit">BTCpuProcessInit</button>
-        <button class="navlink stub" data-target="panel-resetconsistent">BTCpuResetToConsistentState <em>(stub)</em></button>
+        <button class="navlink" data-target="panel-resetconsistent">BTCpuResetToConsistentState</button>
         <button class="navlink stub" data-target="panel-isfeature">BTCpuIsProcessorFeaturePresent <em>(n/a)</em></button>
 
         <div class="subhead">Internal&nbsp;machinery</div>
@@ -277,6 +277,7 @@
         <button class="navlink" data-target="panel-getcurrentcpuarea">RtlWow64GetCurrentCpuArea</button>
         <button class="navlink" data-target="panel-extctxlen">RtlGetExtendedContextLength2</button>
         <button class="navlink" data-target="panel-legacyctxlen">RtlpGetLegacyContextLength</button>
+        <button class="navlink" data-target="panel-ctxfromamd64">RtlpWow64CtxFromAmd64</button>
 
         <div class="subhead">About this page</div>
         <button class="navlink" data-target="panel-methodology">methodology</button>
@@ -347,7 +348,7 @@
                 <tr><td class="reg">BTCpuGetBopCode</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuGetContext</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuProcessInit</td><td>function</td><td>yes</td></tr>
-                <tr><td class="reg">BTCpuResetToConsistentState</td><td>function</td><td>stub</td></tr>
+                <tr><td class="reg">BTCpuResetToConsistentState</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuSetContext</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuSimulate</td><td>function</td><td>yes</td></tr>
                 <tr><td class="reg">BTCpuThreadInit</td><td>function <span style="color:#888;">(not in original export list; found adjacent, also documented)</span></td><td>yes</td></tr>
@@ -626,8 +627,43 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
         </section>
 
         <section id="panel-resetconsistent" class="panel">
-            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuResetToConsistentState <span style="font-weight:normal;color:#999;">— not yet documented</span></h2>
-            <p>Not yet traced. Likely involved in exception/unwind recovery given the name and its neighbours in the export table.</p>
+            <h2 class="fn-title"><span class="module-prefix">wow64cpu!</span>BTCpuResetToConsistentState</h2>
+            <div class="badge-row"><span class="badge">exported</span><span class="badge">recovery / re-arm path</span></div>
+
+            <p>
+            Unlike the Get/SetContext pair, this does not take a thread handle — its argument is
+            a pointer to a structure holding a native AMD64 <code>CONTEXT</code>, used to rebuild
+            a valid 32-bit guest context and re-arm the thread's CPU area so simulated execution
+            can resume normally. The shape and placement strongly suggest this is the recovery
+            path taken after something interrupts normal simulation — most plausibly an
+            unhandled exception during 32-bit execution — rather than something exercised on
+            every ordinary mode switch.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; structure of the rcx argument only partially known</span>
+<span class="kw">NTSTATUS</span> <span class="type">BTCpuResetToConsistentState</span>(
+    <span class="kw">PVOID</span> Unknown  <span class="comment">// rcx — [rcx] is a destination struct ptr,</span>
+                    <span class="comment">// [rcx+8] a pointer to a native AMD64 CONTEXT-shaped struct</span>
+);</pre>
+
+            <h3>behaviour</h3>
+            <ol class="steps">
+                <li>Reads <code>[rcx+8]</code> and checks its <code>SegCs</code>-equivalent field (offset <code>+0x38</code>) equals <code>0x23</code>, the standard 64-bit code-segment selector. If it doesn't match, the function is a no-op and returns immediately — it only does real work when the current native context is genuinely running in 64-bit mode.</li>
+                <li>Calls <code>RtlWow64GetCpuAreaInfo</code> for the current thread, fast-failing (<code>int 29h</code>) on failure — same pattern used throughout the module.</li>
+                <li>Calls <code>RtlpWow64CtxFromAmd64</code> to convert the native AMD64 context into the 32-bit guest context shape. The flags passed (<code>0x1003F</code> vs. <code>0x1007F</code>) are chosen based on whether <code>CpupCpuAreaEnabledFeatures</code> is set, consistent with the extra bits requesting the XSTATE-extended portion of the conversion when extended features are enabled.</li>
+                <li>Sets a flag bit on the converted context and clears another (likely marking it valid / clearing an in-progress indicator), then copies a field within the CPU area from offset <code>+0xE8</code> to <code>+0x98</code>.</li>
+                <li><strong>Installs the address of <code>CpupReturnFromSimulatedCode</code> into the CPU area's return-address slot (offset <code>+0xF8</code>)</strong> — the same slot <code>RunSimulatedCode</code> reads on every mode switch. This explicitly re-points the next transition back at the normal simulated-code return path.</li>
+                <li>Writes the 32-bit user-mode code selector (<code>0x33</code>) into the context, and finishes by writing the 32-bit data/stack selector (<code>0x2B</code>) and copied field values out to the destination structure at <code>[rcx]</code>.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">reading between the lines</div>
+                Every individual piece here — the CS sanity check, the return-address re-arm, the
+                selector hardcoding — points at the same purpose: forcibly restoring a thread's
+                CPU area to a known-good state from which <code>RunSimulatedCode</code> can safely
+                resume, after something (most plausibly exception handling) has left it in an
+                inconsistent state. The name is not misleading.
+            </div>
         </section>
 
         <section id="panel-isfeature" class="panel">
@@ -853,6 +889,55 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
             </p>
         </section>
 
+        <section id="panel-ctxfromamd64" class="panel">
+            <h2 class="fn-title"><span class="module-prefix">ntdll!</span>RtlpWow64CtxFromAmd64</h2>
+            <div class="badge-row"><span class="badge">ntdll.dll, private (note the p)</span><span class="badge">traced to completion</span></div>
+
+            <p>
+            Converts a native AMD64 <code>CONTEXT</code> into a 32-bit guest
+            <code>WOW64_CONTEXT</code>, group by group. Called from
+            <code>BTCpuResetToConsistentState</code> whenever a native context needs to be
+            reflected back into guest form. The trace now reaches the function's actual
+            <code>ret</code>, so the group-by-group structure below is complete, though a couple
+            of individual field identities within each group are inferred from offset patterns
+            rather than confirmed against a named structure.
+            </p>
+
+            <pre class="proto"><span class="comment">// derived; field-level identity of some offsets inferred, not confirmed</span>
+<span class="kw">VOID</span> <span class="type">RtlpWow64CtxFromAmd64</span>(
+    <span class="kw">ULONG</span>  ContextFlags,        <span class="comment">// ecx</span>
+    <span class="kw">PCONTEXT</span> NativeContext,     <span class="comment">// rdx — source, native AMD64 context</span>
+    <span class="kw">PWOW64_CONTEXT</span> GuestContext  <span class="comment">// r8  — destination, 32-bit guest context</span>
+);</pre>
+
+            <h3>behaviour</h3>
+            <p>
+            The function works through the requested <code>ContextFlags</code> one group at a
+            time. Every group follows the same shape: test whether the group's bit is set in
+            both a caller-independent mask and the flags already present in the destination
+            buffer, and only then copy that group's fields and OR the group's bit into an output
+            flags accumulator kept in <code>edi</code>. The groups, in the order handled:
+            </p>
+            <ol class="steps">
+                <li><strong>Segment/control group (bit <code>0x1</code>).</strong> Copies <code>SegCs</code>/<code>SegSs</code>-family fields and hardcodes the 32-bit code selector (<code>0x23</code>) into the destination.</li>
+                <li><strong>Second segment group (bit <code>0x2</code>).</strong> Copies five more 32-bit fields — reads as the remaining segment registers (<code>DS</code>/<code>ES</code>/<code>FS</code>/<code>GS</code> family) plus one general register.</li>
+                <li><strong>Debug/status group (bit <code>0x4</code>).</strong> Zeroes three destination fields and hardcodes <code>0x53</code> into a fourth — looks like clearing debug-status fields that don't carry over from native to guest context and substituting a fixed selector value.</li>
+                <li><strong>Floating-point/XMM group (bit <code>0x8</code>, checked jointly with bit <code>0x20</code>).</strong> Bulk-copies a 128-byte-per-iteration block of XMM register state (via <code>movups</code>, two registers per iteration, several iterations) from the native context's FP save area into the guest context's floating-point save area. If a different, narrower flag combination is set instead, it calls a newly-observed helper, <code>RtlFxToFnFrame</code>, to convert the legacy FXSAVE-format FP state into the newer FP "FN frame" format rather than copying raw XMM bytes.</li>
+                <li><strong>Integer register group (bit <code>0x10</code>).</strong> Either zeroes four destination fields (when the native context's flags at offset <code>+0x70</code> don't match an expected pattern) or copies six 32-bit general-purpose register fields across and masks the result — this is the branch that actually carries EAX/EBX/ECX/EDX/ESI/EDI-family values from native to guest form.</li>
+                <li><strong>Extended/XSTATE group (bit <code>0x40</code>).</strong> If both source and destination agree this group is present, calls a second newly-observed helper, <code>RtlpCopyXStateChunk</code>, to copy the XSTATE-extended save area rather than doing it inline.</li>
+            </ol>
+
+            <div class="note">
+                <div class="label">two new internal helpers surfaced by this trace</div>
+                <code>RtlFxToFnFrame</code> (legacy FXSAVE → FN-frame FP state conversion) and
+                <code>RtlpCopyXStateChunk</code> (XSTATE region copy) are both called from here
+                but not themselves traced yet. Both are large enough — particularly
+                <code>RtlFxToFnFrame</code>, which is a long, table-driven function handling the
+                x87 FPU tag-word/register-index conversion — to warrant their own separate pass
+                rather than folding them into this entry.
+            </div>
+        </section>
+
         <!-- ================= methodology ================= -->
         <section id="panel-methodology" class="panel">
             <h2 class="fn-title">methodology</h2>
@@ -887,7 +972,9 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
             <div>WOW64CPU.DLL is not documented by Microsoft. This page describes observed behaviour only and is not derived from, and does not reproduce, any Microsoft source or internal documentation.</div>
             <div class="revhist">rev. 1 — initial publication: BTCpuGetContext, BTCpuSetContext, BTCpuGetBopCode, BTCpuSimulate, BTCpuTurboThunkControl, RunSimulatedCode, TurboDispatchJumpAddress*
 rev. 2 — added BTCpuProcessInit, BTCpuThreadInit (undocumented export, not in the commonly-quoted list)
-rev. 3 — added NTDLL RTL support section: RtlWow64GetCpuAreaInfo, RtlWow64GetCurrentCpuArea, RtlGetExtendedContextLength2 (partially verified), RtlpGetLegacyContextLength</div>
+rev. 3 — added NTDLL RTL support section: RtlWow64GetCpuAreaInfo, RtlWow64GetCurrentCpuArea, RtlGetExtendedContextLength2 (partially verified), RtlpGetLegacyContextLength
+rev. 4 — added BTCpuResetToConsistentState (full); RtlpWow64CtxFromAmd64 (partial, disassembly incomplete)
+rev. 5 — RtlpWow64CtxFromAmd64 traced to completion; surfaced two further internal helpers not yet documented: RtlFxToFnFrame, RtlpCopyXStateChunk</div>
         </footer>
     </main>
 </div>
