@@ -281,6 +281,7 @@
 
         <div class="subhead">Structures</div>
         <button class="navlink" data-target="panel-context-struct">_CONTEXT (AMD64)</button>
+        <button class="navlink" data-target="panel-cpuarea-struct">per-thread CPU area <em>(unnamed)</em></button>
 
         <div class="subhead">About this page</div>
         <button class="navlink" data-target="panel-methodology">methodology</button>
@@ -611,7 +612,7 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
 
             <h3>behaviour</h3>
             <ol class="steps">
-                <li>Resolves a count from a TEB field (offset <code>0x180C</code>); a negative value triggers an extra indirection through another TEB-adjacent field (offset <code>0x18</code>) before continuing — consistent with resolving an entry in some dynamically-sized, possibly activation-context-related table. The exact structure being walked here is not fully pinned down.</li>
+                <li>Resolves a count from the TEB's <code>WowTebOffset</code> field (offset <code>+0x180C</code>, confirmed via <code>dt ntdll!_TEB</code>); a negative value triggers an extra indirection through another TEB-adjacent field (offset <code>+0x18</code>) before continuing — consistent with the documented meaning of <code>WowTebOffset</code> as the signed offset to the WOW64 TEB, where a negative value is the normal case and other values indicate a different addressing mode.</li>
                 <li>Sets a flag bit on whatever that resolves to, then checks <code>SharedUserData+0x308</code> (a <code>KUSER_SHARED_DATA</code> field) against <code>1</code>. If it matches, the fast-syscall setup below is skipped entirely and the function proceeds straight to the CPU-area-features step.</li>
                 <li>Otherwise, queries <code>NtQueryInformationProcess</code> (current process, information class <code>0x2C</code>, i.e. <code>ProcessMitigationPolicy</code>) for the dynamic-code mitigation policy. Failure, or a policy value indicating dynamic code is prohibited, skips the fast-syscall setup and leaves <code>CpupSystemCallFast</code> at its default (off).</li>
                 <li>If dynamic code is permitted: calls <code>NtProtectVirtualMemory</code> on the page containing <code>KiFastSystemCall</code>. On success, sets <code>CpupSystemCallFast = 1</code> — this is the flag <code>BTCpuGetBopCode</code> reads on every subsequent syscall dispatch.</li>
@@ -705,7 +706,9 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
 
             <div class="note">
                 <div class="label">why this matters for RunSimulatedCode</div>
-                That same TEB slot, <code>[gs:0x1488]</code>-relative offset <code>0x14D8</code>,
+                That same TEB slot — confirmed via <code>dt ntdll!_TEB</code> to be
+                <code>TlsSlots[1]</code>, not a dedicated named WOW64 field — relative offset
+                <code>0x14D8</code>,
                 is exactly what <code>RunSimulatedCode</code> reads before deciding whether to
                 call <code>RtlXRestore</code> on the way into 32-bit mode. <code>BTCpuThreadInit</code>'s
                 entire purpose is computing that pointer once, at thread creation, rather than
@@ -799,7 +802,9 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
             <p>
             Functionally identical to <code>RtlWow64GetCpuAreaInfo</code>, but operates on the
             <em>calling thread's own</em> CPU area rather than one supplied by the caller —
-            fetched directly from the TEB (<code>gs:[0x1488]</code>) at the start of the
+            fetched directly from the TEB's <code>TlsSlots[1]</code> (offset <code>+0x1488</code>;
+            confirmed via <code>dt ntdll!_TEB</code> to be an ordinary TLS slot, not a dedicated
+            named WOW64 field) at the start of the
             function.
             </p>
 
@@ -1039,6 +1044,59 @@ wow64!RunCpuSimulation+0xd     <span class="comment">(re-entry, not a fresh call
             </div>
         </section>
 
+        <section id="panel-cpuarea-struct" class="panel">
+            <h2 class="fn-title">the per-thread CPU area <span style="font-weight:normal;color:#999;">(no Microsoft name found)</span></h2>
+            <div class="badge-row"><span class="badge">no public type</span><span class="badge">TEB-&gt;TlsSlots[1]</span><span class="badge">offset table only</span></div>
+
+            <p>
+            Every <code>BTCpu*</code> function on this page reads or writes this structure, and
+            it is reached from an ordinary TLS slot (<code>TEB-&gt;TlsSlots[1]</code>, confirmed
+            via <code>dt ntdll!_TEB</code>) rather than a dedicated named field. No type name for
+            it was found anywhere in this build's public symbols — <code>dt</code> against every
+            plausible name (<code>_WOW64_CPURESERVED</code>, <code>_WOW64_CPU_RESERVED</code>,
+            <code>_CPU_AREA_INFO</code>) failed, wildcard symbol search
+            (<code>x ntdll!*CPURESERVED*</code>, <code>x ntdll!*Wow64Reserved*</code>) turned up
+            nothing, and the architecturally-adjacent <code>_CHPEV2_CPUAREA_INFO</code> (the
+            ARM64/CHPE equivalent, which <em>is</em> named) doesn't resolve either. This appears
+            to be genuinely nameless in any available symbol source, not merely unresolved by a
+            wrong guess.
+            </p>
+
+            <p>
+            The offsets below are gathered from every function on this page that touches the
+            structure, cross-checked once against a live memory dump taken mid-session (values
+            were largely zero/uninitialized at that point, but the machine-type tag and several
+            hardcoded selector values matched exactly, which is why they're listed as confirmed
+            rather than merely inferred).
+            </p>
+
+            <table class="args">
+                <tr><th>offset</th><th>meaning (as derived)</th><th>confidence</th></tr>
+                <tr><td class="reg">+0x02</td><td>machine-type tag (e.g. <code>0x14C</code> for i386)</td><td>confirmed — matched a live value exactly</td></tr>
+                <tr><td class="reg">+0x20, +0x24, +0x28, +0x34, +0x38</td><td>saved guest general-purpose registers (edi/esi/ebx/ebp/eax pattern, per <code>RunSimulatedCode</code>)</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x2C, +0x30</td><td>saved guest ecx/edx (per <code>RunSimulatedCode</code> entry sequence)</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x3C</td><td>saved guest instruction pointer / return offset</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x44</td><td>saved eflags</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x48</td><td>saved stack pointer (esp)</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x50</td><td>FXSAVE-format FP/SSE state (base of <code>fxrstor</code> region)</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x80 (bit 0)</td><td>"state needs restore" flag, tested/cleared via <code>btr</code> in <code>RunSimulatedCode</code></td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0x90, +0x9C, +0xC0</td><td>segment selector fields — <code>0x53</code>/<code>0x23</code>/<code>0x2B</code> hardcoded values matched exactly at a live address</td><td>confirmed — matched live values exactly</td></tr>
+                <tr><td class="reg">+0x98</td><td>copy destination for <code>+0xE8</code> in <code>BTCpuResetToConsistentState</code></td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0xCC</td><td>base offset used with a variable field at <code>+0x2DC</code> to compute the pointer <code>BTCpuThreadInit</code> caches in the TEB</td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0xE8</td><td>copy source for <code>+0x98</code> in <code>BTCpuResetToConsistentState</code></td><td>inferred from disassembly</td></tr>
+                <tr><td class="reg">+0xF8</td><td>return-address slot — read by <code>RunSimulatedCode</code> on every mode switch, explicitly re-armed by <code>BTCpuResetToConsistentState</code></td><td>inferred from disassembly, high confidence given consistent use across two functions</td></tr>
+                <tr><td class="reg">+0x2DC</td><td>variable field added to <code>+0xCC</code> base in <code>BTCpuThreadInit</code></td><td>inferred from disassembly</td></tr>
+            </table>
+
+            <div class="note">
+                <div class="label">this is our own consolidation, not a Microsoft table</div>
+                No name or canonical field list for this structure is claimed here — this is
+                simply every offset this page's tracing has touched, gathered in one place for
+                convenience, each labeled with how confident the meaning assigned to it actually
+                is.
+            </div>
+        </section>
+
         <!-- ================= methodology ================= -->
         <section id="panel-methodology" class="panel">
             <h2 class="fn-title">methodology</h2>
@@ -1076,7 +1134,8 @@ rev. 2 — added BTCpuProcessInit, BTCpuThreadInit (undocumented export, not in 
 rev. 3 — added NTDLL RTL support section: RtlWow64GetCpuAreaInfo, RtlWow64GetCurrentCpuArea, RtlGetExtendedContextLength2 (partially verified), RtlpGetLegacyContextLength
 rev. 4 — added BTCpuResetToConsistentState (full); RtlpWow64CtxFromAmd64 (partial, disassembly incomplete)
 rev. 5 — RtlpWow64CtxFromAmd64 traced to completion; surfaced two further internal helpers not yet documented: RtlFxToFnFrame, RtlpCopyXStateChunk
-rev. 6 — added Structures section (_CONTEXT, AMD64, resolved via `dt`); replaced raw offsets with named fields in RtlpWow64CtxFromAmd64 and BTCpuResetToConsistentState where confirmed against the resolved layout</div>
+rev. 6 — added Structures section (_CONTEXT, AMD64, resolved via `dt`); replaced raw offsets with named fields in RtlpWow64CtxFromAmd64 and BTCpuResetToConsistentState where confirmed against the resolved layout
+rev. 7 — confirmed BTCpuProcessInit's +0x180C field is TEB.WowTebOffset; corrected the CPU-area pointer's TEB source to TlsSlots[1] (not a dedicated field, per dt ntdll!_TEB); added a consolidated offset reference for the per-thread CPU area, which has no resolvable Microsoft type name in any available symbol source</div>
         </footer>
     </main>
 </div>
